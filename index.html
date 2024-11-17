@@ -137,16 +137,99 @@
             font-size: 14px;
             color: #666;
         }
+        .user-select {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 10px;
+        }
+
+        .user-button {
+            padding: 8px 16px;
+            border: 2px solid #007bff;
+            border-radius: 4px;
+            background: white;
+            color: #007bff;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .user-button.active {
+            background: #007bff;
+            color: white;
+        }
+
+        .progress-indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+
+        .completed {
+            background: #28a745;
+        }
+
+        .file.completed::after {
+            content: "✓";
+            color: #28a745;
+            margin-left: auto;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            font-size: 1.2em;
+            color: #007bff;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-overlay i {
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
     </style>
 </head>
 <body>
-    <div class="sidebar" id="fileTree">
-        <div class="loading">Загрузка...</div>
+    <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+        <i class="fas fa-spinner"></i>
+        <span>Загрузка...</span>
     </div>
+
+    <div class="user-select">
+        <div class="user-info">
+            <span id="currentUserDisplay"></span>
+        </div>
+        <button class="user-button" onclick="selectUser('Вадим')">Вадим</button>
+        <button class="user-button" onclick="selectUser('Дарья')">Дарья</button>
+    </div>
+
+    <div class="sidebar" id="fileTree">
+        <div class="loading">Загрузка структуры курса...</div>
+    </div>
+
     <div class="main-content">
         <div class="breadcrumbs" id="breadcrumbs"></div>
         <div class="content" id="contentView">
-            <h2>Выберите файл для просмотра</h2>
+            <h2>Выберите пользователя и файл для просмотра</h2>
         </div>
         <div class="navigation" id="navigation">
             <button class="nav-button" id="prevButton" disabled>
@@ -159,9 +242,84 @@
     </div>
 
     <script>
+        let currentUser = localStorage.getItem('currentUser') || null;
         let currentFile = null;
         let filesList = [];
         let filesMap = new Map();
+        let userProgress = { completed: [] };
+
+        function showLoading() {
+            document.getElementById('loadingOverlay').style.display = 'flex';
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').style.display = 'none';
+        }
+
+        function updateUserDisplay() {
+            const display = document.getElementById('currentUserDisplay');
+            display.textContent = currentUser ? `Текущий пользователь: ${currentUser}` : 'Выберите пользователя';
+        }
+
+        async function selectUser(user) {
+            currentUser = user;
+            localStorage.setItem('currentUser', user);
+
+            // Обновляем UI
+            document.querySelectorAll('.user-button').forEach(btn => {
+                btn.classList.toggle('active', btn.innerText === user);
+            });
+            updateUserDisplay();
+
+            // Загружаем прогресс пользователя
+            await loadUserProgress();
+
+            // Обновляем отображение файлов
+            updateProgressDisplay();
+        }
+
+        async function loadUserProgress() {
+            if (!currentUser) return;
+
+            try {
+                const response = await fetch(`/api/progress?user=${encodeURIComponent(currentUser)}`);
+                if (!response.ok) throw new Error('Ошибка загрузки прогресса');
+                userProgress = await response.json();
+            } catch (error) {
+                console.error('Ошибка загрузки прогресса:', error);
+                userProgress = { completed: [] };
+            }
+        }
+
+        async function updateProgress(filePath, completed = true) {
+            if (!currentUser) return;
+
+            try {
+                const response = await fetch('/api/progress', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user: currentUser,
+                        file_path: filePath,
+                        completed: completed
+                    })
+                });
+
+                if (!response.ok) throw new Error('Ошибка обновления прогресса');
+                await loadUserProgress();
+            } catch (error) {
+                console.error('Ошибка обновления прогресса:', error);
+            }
+        }
+
+        function updateProgressDisplay() {
+            document.querySelectorAll('.file').forEach(fileDiv => {
+                const filePath = fileDiv.dataset.path;
+                fileDiv.classList.toggle('completed', userProgress.completed.includes(filePath));
+            });
+        }
 
         function cleanFileName(name) {
             return name.replace(/\[slivoff\.com\]/gi, '').trim();
@@ -169,13 +327,19 @@
 
         function buildFilesList(structure, path = []) {
             for (const [key, value] of Object.entries(structure)) {
+                const cleanName = cleanFileName(key);
                 if (typeof value === 'object') {
-                    buildFilesList(value, [...path, cleanFileName(key)]);
+                    buildFilesList(value, [...path, cleanName]);
                 } else {
-                    const cleanName = cleanFileName(key);
                     const fullPath = [...path, cleanName].join(' / ');
-                    filesList.push({ name: cleanName, path: value, fullPath });
-                    filesMap.set(value, { name: cleanName, path: value, fullPath });
+                    const fileInfo = {
+                        name: cleanName,
+                        path: value,
+                        fullPath,
+                        parentPath: path.join(' / ')
+                    };
+                    filesList.push(fileInfo);
+                    filesMap.set(value, fileInfo);
                 }
             }
         }
@@ -185,20 +349,40 @@
             const prevButton = document.getElementById('prevButton');
             const nextButton = document.getElementById('nextButton');
 
-            prevButton.disabled = currentIndex <= 0;
-            nextButton.disabled = currentIndex === -1 || currentIndex === filesList.length - 1;
+            if (currentIndex !== -1) {
+                prevButton.disabled = currentIndex <= 0;
+                nextButton.disabled = currentIndex >= filesList.length - 1;
 
-            prevButton.onclick = () => {
-                if (currentIndex > 0) {
-                    showContent(filesList[currentIndex - 1].path, filesList[currentIndex - 1].name);
-                }
-            };
+                // Обновляем обработчики событий
+                prevButton.onclick = () => {
+                    if (currentIndex > 0) {
+                        const prevFile = filesList[currentIndex - 1];
+                        showContent(prevFile.path, prevFile.name);
+                        highlightFileInTree(prevFile.path);
+                    }
+                };
 
-            nextButton.onclick = () => {
-                if (currentIndex < filesList.length - 1) {
-                    showContent(filesList[currentIndex + 1].path, filesList[currentIndex + 1].name);
+                nextButton.onclick = () => {
+                    if (currentIndex < filesList.length - 1) {
+                        const nextFile = filesList[currentIndex + 1];
+                        showContent(nextFile.path, nextFile.name);
+                        highlightFileInTree(nextFile.path);
+                    }
+                };
+            } else {
+                prevButton.disabled = true;
+                nextButton.disabled = true;
+            }
+        }
+
+        function highlightFileInTree(filePath) {
+            document.querySelectorAll('.file').forEach(fileDiv => {
+                fileDiv.classList.remove('active');
+                if (fileDiv.dataset.path === filePath) {
+                    fileDiv.classList.add('active');
+                    fileDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                 }
-            };
+            });
         }
 
         function updateBreadcrumbs() {
@@ -232,6 +416,8 @@
 
                     folderName.onclick = () => {
                         folderDiv.classList.toggle('collapsed');
+                        const icon = folderName.querySelector('.folder-icon');
+                        icon.style.transform = folderDiv.classList.contains('collapsed') ? 'rotate(-90deg)' : '';
                     };
 
                     folderDiv.appendChild(folderName);
@@ -242,14 +428,26 @@
                     // Это файл
                     const fileDiv = document.createElement('div');
                     fileDiv.className = 'file';
+                    fileDiv.dataset.path = value;
 
-                    const isVideo = key.toLowerCase().endsWith('.mp4');
-                    const icon = isVideo ? 'fas fa-video' : 'fas fa-file-alt';
+                    const extension = key.toLowerCase().split('.').pop();
+                    let icon = 'fas fa-file';
+                    if (extension === 'mp4') {
+                        icon = 'fas fa-video';
+                    } else if (extension === 'pptx') {
+                        icon = 'fas fa-file-powerpoint';
+                    } else if (extension === 'mht') {
+                        icon = 'fas fa-file-alt';
+                    }
 
                     fileDiv.innerHTML = `
                         <i class="${icon}"></i>
                         <span>${cleanName}</span>
                     `;
+
+                    if (userProgress.completed.includes(value)) {
+                        fileDiv.classList.add('completed');
+                    }
 
                     fileDiv.onclick = () => {
                         document.querySelectorAll('.file').forEach(f => f.classList.remove('active'));
@@ -262,32 +460,67 @@
             }
         }
 
-        function showContent(path, filename) {
+        async function showContent(path, filename) {
+            if (!currentUser) {
+                alert('Пожалуйста, выберите пользователя');
+                return;
+            }
+
+            showLoading();
             currentFile = path;
             const contentView = document.getElementById('contentView');
             const fileUrl = `/content/${path}`;
 
-            if (filename.toLowerCase().endsWith('.mp4')) {
-                contentView.innerHTML = `
-                    <video controls>
-                        <source src="${fileUrl}" type="video/mp4">
-                        Ваш браузер не поддерживает видео тег.
-                    </video>
-                `;
-            } else if (filename.toLowerCase().endsWith('.mht')) {
-                contentView.innerHTML = `<iframe src="${fileUrl}"></iframe>`;
-            }
+            try {
+                const extension = filename.toLowerCase().split('.').pop();
 
-            updateNavigation();
-            updateBreadcrumbs();
+                if (extension === 'mp4') {
+                    contentView.innerHTML = `
+                        <video controls autoplay>
+                            <source src="${fileUrl}" type="video/mp4">
+                            Ваш браузер не поддерживает видео тег.
+                        </video>
+                    `;
+                } else if (extension === 'pptx') {
+                    contentView.innerHTML = `
+                        <iframe src="${fileUrl}" style="width:100%; height:100vh; border:none;"></iframe>
+                    `;
+                } else {
+                    contentView.innerHTML = `<iframe src="${fileUrl}"></iframe>`;
+                }
+
+                // Отмечаем файл как просмотренный
+                await updateProgress(path, true);
+
+                updateNavigation();
+                updateBreadcrumbs();
+                highlightFileInTree(path);
+            } catch (error) {
+                console.error('Ошибка при загрузке контента:', error);
+                contentView.innerHTML = `
+                    <div class="error">
+                        <h3>Ошибка загрузки</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            } finally {
+                hideLoading();
+            }
         }
 
-        // Загружаем структуру при загрузке страницы
-        fetch('/api/structure')
-            .then(response => response.json())
-            .then(structure => {
+        // Загрузка структуры файлов
+        async function loadFileTree() {
+            try {
+                const response = await fetch('/api/structure');
+                if (!response.ok) throw new Error('Ошибка загрузки структуры файлов');
+
+                const structure = await response.json();
+                filesList = [];
+                filesMap.clear();
+
                 const fileTree = document.getElementById('fileTree');
                 fileTree.innerHTML = '';
+
                 createFileTree(structure, fileTree);
                 buildFilesList(structure);
 
@@ -296,15 +529,38 @@
                 if (firstFolder) {
                     firstFolder.classList.remove('collapsed');
                 }
-            })
-            .catch(error => {
+
+                updateProgressDisplay();
+            } catch (error) {
+                console.error('Ошибка загрузки структуры:', error);
                 document.getElementById('fileTree').innerHTML = `
                     <div class="error">
-                        Ошибка загрузки структуры курса:<br>
-                        ${error.message}
+                        <h3>Ошибка загрузки структуры курса</h3>
+                        <p>${error.message}</p>
                     </div>
                 `;
-            });
+            }
+        }
+
+        // Инициализация при загрузке страницы
+        window.onload = async () => {
+            updateUserDisplay();
+            if (currentUser) {
+                await selectUser(currentUser);
+            }
+            await loadFileTree();
+        };
+
+        // Обработчик горячих клавиш
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                if (e.key === 'ArrowLeft' && !document.getElementById('prevButton').disabled) {
+                    document.getElementById('prevButton').click();
+                } else if (e.key === 'ArrowRight' && !document.getElementById('nextButton').disabled) {
+                    document.getElementById('nextButton').click();
+                }
+            }
+        });
     </script>
 </body>
 </html>
