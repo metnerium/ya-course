@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Просмотр курса</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+        }
+
+        .sidebar {
+            width: 300px;
+            background: #f5f5f5;
+            padding: 20px;
+            overflow-y: auto;
+            border-right: 1px solid #ddd;
+            flex-shrink: 0;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .content {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .navigation {
+            padding: 15px;
+            background: #f8f9fa;
+            border-top: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .nav-button {
+            padding: 8px 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+        }
+
+        .nav-button:hover {
+            background: #0056b3;
+        }
+
+        .nav-button:disabled {
+            background: #ccc;
+            cursor: default;
+        }
+
+        .folder {
+            margin-left: 20px;
+        }
+
+        .folder-name {
+            cursor: pointer;
+            padding: 8px;
+            margin: 2px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-radius: 4px;
+        }
+
+        .folder-name:hover {
+            background: #e9ecef;
+        }
+
+        .file {
+            margin-left: 28px;
+            padding: 6px 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #333;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+
+        .file:hover {
+            background: #e9ecef;
+        }
+
+        .file.active {
+            background: #007bff;
+            color: white;
+        }
+
+        .folder-icon {
+            width: 16px;
+            text-align: center;
+            transition: transform 0.2s;
+        }
+
+        .folder.collapsed .folder-content {
+            display: none;
+        }
+
+        .folder.collapsed .folder-icon {
+            transform: rotate(-90deg);
+        }
+
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        video {
+            max-width: 100%;
+        }
+
+        .breadcrumbs {
+            padding: 10px 20px;
+            background: #fff;
+            border-bottom: 1px solid #ddd;
+            font-size: 14px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar" id="fileTree">
+        <div class="loading">Загрузка...</div>
+    </div>
+    <div class="main-content">
+        <div class="breadcrumbs" id="breadcrumbs"></div>
+        <div class="content" id="contentView">
+            <h2>Выберите файл для просмотра</h2>
+        </div>
+        <div class="navigation" id="navigation">
+            <button class="nav-button" id="prevButton" disabled>
+                <i class="fas fa-arrow-left"></i> Предыдущий
+            </button>
+            <button class="nav-button" id="nextButton" disabled>
+                Следующий <i class="fas fa-arrow-right"></i>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        let currentFile = null;
+        let filesList = [];
+        let filesMap = new Map();
+
+        function cleanFileName(name) {
+            return name.replace(/\[slivoff\.com\]/gi, '').trim();
+        }
+
+        function buildFilesList(structure, path = []) {
+            for (const [key, value] of Object.entries(structure)) {
+                if (typeof value === 'object') {
+                    buildFilesList(value, [...path, cleanFileName(key)]);
+                } else {
+                    const cleanName = cleanFileName(key);
+                    const fullPath = [...path, cleanName].join(' / ');
+                    filesList.push({ name: cleanName, path: value, fullPath });
+                    filesMap.set(value, { name: cleanName, path: value, fullPath });
+                }
+            }
+        }
+
+        function updateNavigation() {
+            const currentIndex = filesList.findIndex(f => f.path === currentFile);
+            const prevButton = document.getElementById('prevButton');
+            const nextButton = document.getElementById('nextButton');
+
+            prevButton.disabled = currentIndex <= 0;
+            nextButton.disabled = currentIndex === -1 || currentIndex === filesList.length - 1;
+
+            prevButton.onclick = () => {
+                if (currentIndex > 0) {
+                    showContent(filesList[currentIndex - 1].path, filesList[currentIndex - 1].name);
+                }
+            };
+
+            nextButton.onclick = () => {
+                if (currentIndex < filesList.length - 1) {
+                    showContent(filesList[currentIndex + 1].path, filesList[currentIndex + 1].name);
+                }
+            };
+        }
+
+        function updateBreadcrumbs() {
+            const breadcrumbs = document.getElementById('breadcrumbs');
+            if (currentFile && filesMap.has(currentFile)) {
+                breadcrumbs.textContent = filesMap.get(currentFile).fullPath;
+            } else {
+                breadcrumbs.textContent = '';
+            }
+        }
+
+        function createFileTree(structure, parentElement, path = []) {
+            for (const [key, value] of Object.entries(structure)) {
+                const cleanName = cleanFileName(key);
+
+                if (typeof value === 'object') {
+                    // Это папка
+                    const folderDiv = document.createElement('div');
+                    folderDiv.className = 'folder';
+
+                    const folderName = document.createElement('div');
+                    folderName.className = 'folder-name';
+                    folderName.innerHTML = `
+                        <i class="fas fa-chevron-down folder-icon"></i>
+                        <i class="fas fa-folder"></i>
+                        <span>${cleanName}</span>
+                    `;
+
+                    const folderContent = document.createElement('div');
+                    folderContent.className = 'folder-content';
+
+                    folderName.onclick = () => {
+                        folderDiv.classList.toggle('collapsed');
+                    };
+
+                    folderDiv.appendChild(folderName);
+                    folderDiv.appendChild(folderContent);
+                    createFileTree(value, folderContent, [...path, cleanName]);
+                    parentElement.appendChild(folderDiv);
+                } else {
+                    // Это файл
+                    const fileDiv = document.createElement('div');
+                    fileDiv.className = 'file';
+
+                    const isVideo = key.toLowerCase().endsWith('.mp4');
+                    const icon = isVideo ? 'fas fa-video' : 'fas fa-file-alt';
+
+                    fileDiv.innerHTML = `
+                        <i class="${icon}"></i>
+                        <span>${cleanName}</span>
+                    `;
+
+                    fileDiv.onclick = () => {
+                        document.querySelectorAll('.file').forEach(f => f.classList.remove('active'));
+                        fileDiv.classList.add('active');
+                        showContent(value, cleanName);
+                    };
+
+                    parentElement.appendChild(fileDiv);
+                }
+            }
+        }
+
+        function showContent(path, filename) {
+            currentFile = path;
+            const contentView = document.getElementById('contentView');
+            const fileUrl = `/content/${path}`;
+
+            if (filename.toLowerCase().endsWith('.mp4')) {
+                contentView.innerHTML = `
+                    <video controls>
+                        <source src="${fileUrl}" type="video/mp4">
+                        Ваш браузер не поддерживает видео тег.
+                    </video>
+                `;
+            } else if (filename.toLowerCase().endsWith('.mht')) {
+                contentView.innerHTML = `<iframe src="${fileUrl}"></iframe>`;
+            }
+
+            updateNavigation();
+            updateBreadcrumbs();
+        }
+
+        // Загружаем структуру при загрузке страницы
+        fetch('/api/structure')
+            .then(response => response.json())
+            .then(structure => {
+                const fileTree = document.getElementById('fileTree');
+                fileTree.innerHTML = '';
+                createFileTree(structure, fileTree);
+                buildFilesList(structure);
+
+                // Автоматически разворачиваем первую папку
+                const firstFolder = fileTree.querySelector('.folder');
+                if (firstFolder) {
+                    firstFolder.classList.remove('collapsed');
+                }
+            })
+            .catch(error => {
+                document.getElementById('fileTree').innerHTML = `
+                    <div class="error">
+                        Ошибка загрузки структуры курса:<br>
+                        ${error.message}
+                    </div>
+                `;
+            });
+    </script>
+</body>
+</html>
